@@ -3,97 +3,127 @@ from utils.pdf_reader import extract_text_from_pdf, detect_language
 from utils.embedder import chunk_text, embed_chunks
 from utils.qa_engine import create_qa_chain
 from utils.summarizer import summarize_text
-import os
+from utils.meta_extractor import get_case_summary
 from dotenv import load_dotenv
 
 load_dotenv()
+st.set_page_config(page_title="VerbaLex", layout="wide")
 
-st.set_page_config(page_title="VerbaLex - Legal Document Assistant", layout="wide")
-st.title("📄 VerbaLex – Multilingual Legal Document Assistant")
+# --- NAVIGATION BAR ---
+app_mode = st.sidebar.radio("Go to", [" Document Analyzer", " Translator", " Legal Chatbot"])
 
-# Upload PDF
-uploaded_file = st.file_uploader("📤 Upload a legal PDF document", type="pdf")
+# --- SESSION INITIALIZATION ---
+for key in ["pdf_text", "chunks", "db", "language", "filename", "fast_summary", "chat_history", "case_info"]:
+    if key not in st.session_state:
+        st.session_state[key] = None if key != "chat_history" else []
 
-# Process PDF only if not already done
-if uploaded_file and "pdf_text" not in st.session_state:
-    with st.spinner("🔍 Extracting and processing PDF..."):
-        # Step 1: Extract text
-        text = extract_text_from_pdf(uploaded_file)
-        st.session_state["pdf_text"] = text
+# --- FILE INFO DISPLAY ---
+def display_file_info():
+    if st.session_state.get("case_info"):
+        st.markdown(
+            f"<p style='color:gray; font-size:0.9rem; margin-top:0.5rem;'>{st.session_state['case_info']}</p>",
+            unsafe_allow_html=True
+        )
 
-        # Step 2: Detect language
-        lang = detect_language(text)
-        st.session_state["language"] = lang
-        st.success(f"🌐 Detected Language: `{lang}`")
+# === 📄 DOCUMENT ANALYZER ===
+if app_mode == " Document Analyzer":
+    st.title(" VerbaLex – Document Analyzer")
 
-        # Step 3: Chunk and embed
-        chunks = chunk_text(text)
-        db, chunks = embed_chunks(chunks)
-        st.session_state["db"] = db
-        st.session_state["chunks"] = chunks
-        st.success(f"✅ Document processed: {len(chunks)} chunks embedded successfully.")
+    # FILE INFO + UPLOAD SIDE-BY-SIDE
+    col1, col2 = st.columns([4, 2])  # File upload on the left (wider), info on the right (narrower)
 
-# Use cached values
-text = st.session_state.get("pdf_text")
-chunks = st.session_state.get("chunks")
-db = st.session_state.get("db")
+    with col1:
+        uploaded_file = st.file_uploader("📤 Upload Legal PDF", type="pdf", label_visibility="collapsed", key="upload")
+        st.caption("Only text-based PDFs supported. Avoid scanned image-only files.")
 
-# Tabs for Summary and Q&A
-if text and chunks and db:
-    tab1, tab2 = st.tabs(["📝 Summarization", "💬 Q&A Assistant"])
+    with col2:
+        display_file_info()
 
-    with tab1:
-        st.subheader("🧠 Document Summarization")
-        summary_mode = st.radio("Choose summarization mode:", ["Fast Summary", "Detailed Summary"])
 
-        if st.button("🔎 Generate Summary"):
-            with st.spinner("Summarizing... Please wait."):
-                if summary_mode == "Fast Summary":
-                    summary = summarize_text(text[:3000])
-                else:
-                    chunk_summaries = []
-                    progress = st.progress(0)
-                    for i, chunk in enumerate(chunks):
-                        try:
-                            partial = summarize_text(chunk[:1000])
-                            chunk_summaries.append(partial)
-                            progress.progress((i + 1) / len(chunks))
-                        except Exception as e:
-                            chunk_summaries.append("[Summary unavailable]")
-                    progress.empty()
+    # PDF Processing
+    if uploaded_file and not st.session_state["pdf_text"]:
+        with st.spinner(" Processing document..."):
+            text = extract_text_from_pdf(uploaded_file)
+            st.session_state["pdf_text"] = text
 
-                    # Final summarization on combined summaries
-                    combined = "\n".join(chunk_summaries)
-                    summary = summarize_text(combined[:3000])
+            lang = detect_language(text)
+            st.session_state["language"] = lang
 
-            st.success("📋 Summary:")
-            st.text_area("Summary Output", summary, height=300)
-            st.download_button("📥 Download Summary", summary, file_name="verbalex_summary.txt")
+            chunks = chunk_text(text)
+            db, chunks = embed_chunks(chunks)
+            st.session_state["chunks"] = chunks
+            st.session_state["db"] = db
+            st.session_state["filename"] = uploaded_file.name
 
-            st.markdown("💡 **Suggested Questions:**")
-            st.write("- What is the final court decision?")
-            st.write("- Which parties were involved?")
-            st.write("- What relief did the petitioners seek?")
-            st.write("- Why were the requests rejected initially?")
+            summary = summarize_text(text[:3000])
+            st.session_state["fast_summary"] = summary
 
-    with tab2:
-        st.subheader("❓ Ask Questions About the Document")
-        user_question = st.text_input("Enter your legal question")
+            case_info = get_case_summary(text)
+            st.session_state["case_info"] = case_info
 
-        if user_question:
-            answer_box = st.empty()
-            with answer_box.container():
-                with st.spinner("🤖 Thinking..."):
-                    qa_chain = create_qa_chain(db)
-                    response = qa_chain.invoke(user_question)
+        st.rerun()
 
-                st.success("🧠 Answer:")
-                st.write(response['result'])
+    # Fast Summary Display
+    if st.session_state["fast_summary"]:
+        st.subheader("⚡ Fast Summary")
+        st.text_area("Summary", st.session_state["fast_summary"], height=250)
 
-                with st.expander("📚 Source Chunks"):
-                    for i, doc in enumerate(response["source_documents"]):
-                        st.markdown(f"**Chunk {i+1}:**")
-                        st.write(doc.page_content)
+        if st.button(" Generate Detailed Summary"):
+            with st.spinner("Generating detailed summary..."):
+                detailed_parts = []
+                progress = st.progress(0)
+                for i, chunk in enumerate(st.session_state["chunks"]):
+                    try:
+                        part = summarize_text(chunk[:1000])
+                        detailed_parts.append(part)
+                    except Exception:
+                        detailed_parts.append("[Summary unavailable]")
+                    progress.progress((i + 1) / len(st.session_state["chunks"]))
+                progress.empty()
 
-else:
-    st.info("📂 Please upload a legal PDF to begin.")
+                detailed_summary = summarize_text("\n".join(detailed_parts)[:3000])
+                st.text_area(" Detailed Summary", detailed_summary, height=300)
+
+# === 🌐 TRANSLATOR ===
+elif app_mode == " Translator":
+    st.title(" VerbaLex – Translator")
+    display_file_info()
+
+    if st.session_state["pdf_text"]:
+        st.markdown("###  Original Extracted Text:")
+        st.text_area("Original Text", st.session_state["pdf_text"], height=200)
+
+        lang_choice = st.selectbox("Translate to", ["Hindi", "Telugu", "French", "Spanish"])
+        if st.button(" Translate Text"):
+            with st.spinner("Translating..."):
+                st.info(f"(Mock) Translated to {lang_choice}: [Translation output here]")
+    else:
+        st.warning(" Please upload and process a document in the 'Document Analyzer' section.")
+
+# === 🤖 LEGAL CHATBOT ===
+elif app_mode == " Legal Chatbot":
+    st.title(" VerbaLex – Legal Chatbot")
+    display_file_info()
+
+    if st.session_state["db"]:
+        for msg in st.session_state["chat_history"]:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        user_input = st.chat_input("Ask a legal question...")
+
+        if user_input:
+            st.session_state["chat_history"].append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    qa_chain = create_qa_chain(st.session_state["db"])
+                    response = qa_chain.invoke(user_input)
+                    answer = response["result"]
+                    st.markdown(answer)
+
+            st.session_state["chat_history"].append({"role": "assistant", "content": answer})
+    else:
+        st.warning(" Please upload and analyze a PDF in 'Document Analyzer' first.")
