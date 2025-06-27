@@ -1,0 +1,11 @@
+streamlit
+pymupdf
+langdetect
+python-dotenv	
+sentence-transformers
+langchain-community
+transformers
+faiss-cpu
+tqdm
+langchain-groq
+langchain
