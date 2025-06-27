@@ -1,23 +1,24 @@
 import streamlit as st
+from utils.translator import translate_text
 from utils.pdf_reader import extract_text_from_pdf, detect_language
 from utils.embedder import chunk_text, embed_chunks
 from utils.qa_engine import create_qa_chain
 from utils.summarizer import summarize_text
 from utils.meta_extractor import get_case_summary
 from dotenv import load_dotenv
+import textwrap
 
 load_dotenv()
 st.set_page_config(page_title="VerbaLex", layout="wide")
 
-# --- NAVIGATION BAR ---
-app_mode = st.sidebar.radio("Go to", [" Document Analyzer", " Translator", " Legal Chatbot"])
+app_mode = st.sidebar.radio("Go to", ["Document Analyzer", "Translator", "Legal Chatbot"])
 
-# --- SESSION INITIALIZATION ---
+# Session state initialization
 for key in ["pdf_text", "chunks", "db", "language", "filename", "fast_summary", "chat_history", "case_info"]:
     if key not in st.session_state:
         st.session_state[key] = None if key != "chat_history" else []
 
-# --- FILE INFO DISPLAY ---
+# Show extracted file info
 def display_file_info():
     if st.session_state.get("case_info"):
         st.markdown(
@@ -25,50 +26,37 @@ def display_file_info():
             unsafe_allow_html=True
         )
 
-# === 📄 DOCUMENT ANALYZER ===
-if app_mode == " Document Analyzer":
-    st.title(" VerbaLex – Document Analyzer")
-
-    # FILE INFO + UPLOAD SIDE-BY-SIDE
-    col1, col2 = st.columns([4, 2])  # File upload on the left (wider), info on the right (narrower)
+# === Document Analyzer ===
+if app_mode == "Document Analyzer":
+    st.title("VerbaLex – Document Analyzer")
+    col1, col2 = st.columns([4, 2])
 
     with col1:
-        uploaded_file = st.file_uploader("📤 Upload Legal PDF", type="pdf", label_visibility="collapsed", key="upload")
+        uploaded_file = st.file_uploader("Upload Legal PDF", type="pdf", label_visibility="collapsed", key="upload")
         st.caption("Only text-based PDFs supported. Avoid scanned image-only files.")
 
     with col2:
         display_file_info()
 
-
-    # PDF Processing
     if uploaded_file and not st.session_state["pdf_text"]:
-        with st.spinner(" Processing document..."):
+        with st.spinner("Processing document..."):
             text = extract_text_from_pdf(uploaded_file)
             st.session_state["pdf_text"] = text
-
-            lang = detect_language(text)
-            st.session_state["language"] = lang
-
+            st.session_state["language"] = detect_language(text)
             chunks = chunk_text(text)
             db, chunks = embed_chunks(chunks)
             st.session_state["chunks"] = chunks
             st.session_state["db"] = db
             st.session_state["filename"] = uploaded_file.name
-
-            summary = summarize_text(text[:3000])
-            st.session_state["fast_summary"] = summary
-
-            case_info = get_case_summary(text)
-            st.session_state["case_info"] = case_info
-
+            st.session_state["fast_summary"] = summarize_text(text[:3000])
+            st.session_state["case_info"] = get_case_summary(text)
         st.rerun()
 
-    # Fast Summary Display
     if st.session_state["fast_summary"]:
-        st.subheader("⚡ Fast Summary")
+        st.subheader("Fast Summary")
         st.text_area("Summary", st.session_state["fast_summary"], height=250)
 
-        if st.button(" Generate Detailed Summary"):
+        if st.button("Generate Detailed Summary"):
             with st.spinner("Generating detailed summary..."):
                 detailed_parts = []
                 progress = st.progress(0)
@@ -76,33 +64,52 @@ if app_mode == " Document Analyzer":
                     try:
                         part = summarize_text(chunk[:1000])
                         detailed_parts.append(part)
-                    except Exception:
+                    except:
                         detailed_parts.append("[Summary unavailable]")
                     progress.progress((i + 1) / len(st.session_state["chunks"]))
                 progress.empty()
-
                 detailed_summary = summarize_text("\n".join(detailed_parts)[:3000])
-                st.text_area(" Detailed Summary", detailed_summary, height=300)
+                st.text_area("Detailed Summary", detailed_summary, height=300)
 
-# === 🌐 TRANSLATOR ===
-elif app_mode == " Translator":
-    st.title(" VerbaLex – Translator")
+# === Translator ===
+elif app_mode == "Translator":
+    st.title("VerbaLex – Translator")
     display_file_info()
 
     if st.session_state["pdf_text"]:
-        st.markdown("###  Original Extracted Text:")
-        st.text_area("Original Text", st.session_state["pdf_text"], height=200)
+        st.subheader("Extracted Text")
+        st.text_area("Original", st.session_state["pdf_text"][:2000], height=200)
 
-        lang_choice = st.selectbox("Translate to", ["Hindi", "Telugu", "French", "Spanish"])
-        if st.button(" Translate Text"):
-            with st.spinner("Translating..."):
-                st.info(f"(Mock) Translated to {lang_choice}: [Translation output here]")
+        lang_choice = st.selectbox("Target Language", ["Hindi", "Telugu", "French", "Spanish", "German"])
+
+        if st.button("Translate Now"):
+            with st.spinner(f"Translating to {lang_choice}..."):
+                chunks = textwrap.wrap(st.session_state["pdf_text"], 500)
+                translated_chunks = []
+                progress = st.progress(0)
+                for i, chunk in enumerate(chunks):
+                    try:
+                        translated = translate_text(chunk, lang_choice)
+                        translated_chunks.append(translated)
+                    except:
+                        translated_chunks.append("[Translation Error]")
+                    progress.progress((i + 1) / len(chunks))
+                st.session_state["translated_text"] = "\n\n".join(translated_chunks)
+
+        if st.session_state.get("translated_text"):
+            st.subheader(f"Translation Output ({lang_choice})")
+            st.text_area("Translated Text", st.session_state["translated_text"], height=300)
+            st.download_button(
+                "Download Translated Text",
+                st.session_state["translated_text"],
+                file_name=f"translated_{lang_choice.lower()}.txt"
+            )
     else:
-        st.warning(" Please upload and process a document in the 'Document Analyzer' section.")
+        st.warning("Please upload and analyze a document in the 'Document Analyzer' tab first.")
 
-# === 🤖 LEGAL CHATBOT ===
-elif app_mode == " Legal Chatbot":
-    st.title(" VerbaLex – Legal Chatbot")
+# === Legal Chatbot ===
+elif app_mode == "Legal Chatbot":
+    st.title("VerbaLex – Legal Chatbot")
     display_file_info()
 
     if st.session_state["db"]:
@@ -126,4 +133,4 @@ elif app_mode == " Legal Chatbot":
 
             st.session_state["chat_history"].append({"role": "assistant", "content": answer})
     else:
-        st.warning(" Please upload and analyze a PDF in 'Document Analyzer' first.")
+        st.warning("Please upload and analyze a PDF in 'Document Analyzer' first.")
